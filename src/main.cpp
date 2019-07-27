@@ -95,17 +95,30 @@ int main() {
 
           /**
            * Define a path made up of (x,y) points that the car will visit
-           *   sequentially every .02 seconds. 
-           *   The car moves 50 times a second.
+           * sequentially every .02 seconds. 
+           * The car moves 50 times a second.
+           * The map's waypoint are measured from the double yellow line in the middle of the road.
+           * Each lane is 4 meters wide, so in the center of the middle lane, the d value will be 1.5 * 4 = 6.
            */
           /** Since the car moves 50 times a second, 
            *  a distance of 0.5m per move will create a velocity of 25 m/s. 25 m/s is close to 50 MPH.
            */
           double dist_inc = 0.5; // 0.5 meter. 
+#if 0
           for (int i = 0; i < 50; ++i) {
             next_x_vals.push_back(car_x+(dist_inc*i)*cos(deg2rad(car_yaw)));
             next_y_vals.push_back(car_y+(dist_inc*i)*sin(deg2rad(car_yaw)));
           }
+#endif
+          for (int i = 0; i < 50; ++i) {
+            double next_s = car_s + (i+1)*dist_inc;
+            double next_d = 6;
+            vector<double> xy = getXY(next_s, next_d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            next_x_vals.push_back(xy[0]);
+            next_y_vals.push_back(xy[1]);
+          }
+
+
 
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
