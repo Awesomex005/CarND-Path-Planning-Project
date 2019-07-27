@@ -36,7 +36,7 @@ int main() {
     double x;
     double y;
     float s;
-    float d_x;
+    float d_x; //dx, dy is just that normal component to the waypiont. dx, dy只是这个wp的垂直分量。
     float d_y;
     iss >> x;
     iss >> y;
@@ -94,10 +94,18 @@ int main() {
           vector<double> next_y_vals;
 
           /**
-           * TODO: define a path made up of (x,y) points that the car will visit
-           *   sequentially every .02 seconds
+           * Define a path made up of (x,y) points that the car will visit
+           *   sequentially every .02 seconds. 
+           *   The car moves 50 times a second.
            */
-
+          /** Since the car moves 50 times a second, 
+           *  a distance of 0.5m per move will create a velocity of 25 m/s. 25 m/s is close to 50 MPH.
+           */
+          double dist_inc = 0.5; // 0.5 meter. 
+          for (int i = 0; i < 50; ++i) {
+            next_x_vals.push_back(car_x+(dist_inc*i)*cos(deg2rad(car_yaw)));
+            next_y_vals.push_back(car_y+(dist_inc*i)*sin(deg2rad(car_yaw)));
+          }
 
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
