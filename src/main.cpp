@@ -18,7 +18,7 @@ using std::string;
 using std::vector;
 
 int lane = 1; // the middle lane
-double ref_vel = 49.5; //mph
+double ref_vel = 0.0; //mph
 
 int main() {
   uWS::Hub h;
@@ -102,6 +102,41 @@ int main() {
 
           vector<double> next_x_vals;
           vector<double> next_y_vals;
+
+          if(prev_size > 0){
+            car_s = end_path_s; // end_path_s is basically where we will be in the future
+          }
+
+          bool too_close = false;
+
+          //find ref_v to use
+          for(int i=0; i<sensor_fusion.size(); i++){
+            
+            //car in my line 
+            float d = sensor_fusion[i][6];
+            if(d < (2+4*lane+2) && d > (2+4*lane-2)){
+              double vx = sensor_fusion[i][3];
+              double vy = sensor_fusion[i][4];
+              double check_speed = sqrt(vx*vx + vy*vy);
+              double check_car_s = sensor_fusion[i][5];
+
+              // looking for where is the target car in the future. 
+              check_car_s += ((double)prev_size*.02*check_speed); 
+              // check that if in the future, the target car is in front of us and close to us, within 30 meters
+              if((check_car_s > car_s) && ((check_car_s - car_s)<30)){
+                //ref_vel = 29.5; //mile per hour
+                too_close = true;
+              }
+            }
+          }
+
+          if(too_close){
+            ref_vel -= .224; // 5 m/s*s, which is small than the 10 m/s*s limits
+          }else if(ref_vel < 49.5){
+            ref_vel += .224;
+          }
+
+
 
           /**
            * Define a path made up of (x,y) points that the car will visit
