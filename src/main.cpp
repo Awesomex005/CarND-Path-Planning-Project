@@ -17,8 +17,150 @@ using nlohmann::json;
 using std::string;
 using std::vector;
 
+#define MAX_SPEED_MPH 49.5//49.5
+#define ACC_LIMIT 10 // m/s*s
+#define DESIRE_ACC 5 // m/s*s
+#define SIMULATOR_DT 0.02 // The simulator car will visit each (x, Y) path point sequentially every .02 seconds.
+#define DESIRE_DELTA_SPEED mps2mph(DESIRE_ACC*SIMULATOR_DT)
+#define TL -1
+#define TR +1
+#define CL_BEHIND_BUFFER 5 //m
+#define CL_AHEAD_BUFFER 50 //m
 int lane = 1; // the middle lane
 double ref_vel = 0.0; //mph
+
+bool find_car_ahead(double car_s, int &cur_lane, const vector<vector<double>> &sensor_fusion, double &ahead_s, double &speed_mph){
+  bool found = false;
+  double ahead_closest_s = 9999;
+  double targe_car_s = 0;
+  double vx = 0;
+  double vy = 0;
+  for(auto targe_car:sensor_fusion){
+    float d = targe_car[6];
+    targe_car_s = targe_car[5];
+    if(d < (2+4*cur_lane+2) && d > (2+4*cur_lane-2) && targe_car_s > car_s ){
+      if(targe_car_s < ahead_closest_s){
+        ahead_closest_s = targe_car_s;
+        vx = targe_car[3];
+        vy = targe_car[4];
+        found = true;
+      }
+    }
+  }
+  
+  ahead_s = ahead_closest_s;
+  speed_mph = mps2mph(sqrt(vx*vx + vy*vy));
+  return found;
+}
+
+bool find_car_behind(double car_s, int &cur_lane, const vector<vector<double>> &sensor_fusion, double &behind_s, double &speed_mph){
+  bool found = false;
+  double behind_closest_s = -1;
+  double targe_car_s = 0;
+  double vx = 0;
+  double vy = 0;
+  for(auto targe_car:sensor_fusion){
+    float d = targe_car[6];
+    targe_car_s = targe_car[5];
+    if(d < (2+4*cur_lane+2) && d > (2+4*cur_lane-2) && targe_car_s < car_s ){
+      if(targe_car_s > behind_closest_s){
+        behind_closest_s = targe_car_s;
+        vx = targe_car[3];
+        vy = targe_car[4];
+        found = true;
+      }
+    }
+  }
+  
+  behind_s = behind_closest_s;
+  speed_mph = mps2mph(sqrt(vx*vx + vy*vy));
+  return found;
+}
+
+
+void gen_KL_ref_v(double car_s, double &ref_vel, int &cur_lane, const vector<vector<double>> &sensor_fusion, bool &CL_req){
+
+  double ahead_car_s = 9999;
+  double ahead_car_speed_mph = 0;
+  double dist_2_ahead_car = -1;
+  bool car_ahead = false;
+  car_ahead = find_car_ahead(car_s, cur_lane, sensor_fusion, ahead_car_s, ahead_car_speed_mph);
+  
+  if(car_ahead){
+    dist_2_ahead_car = ahead_car_s - car_s;
+    if(dist_2_ahead_car < 30 && ref_vel > ahead_car_speed_mph){
+
+      CL_req = true;
+      if((ref_vel - ahead_car_speed_mph) > DESIRE_DELTA_SPEED){
+        ref_vel -= DESIRE_DELTA_SPEED;
+        printf("DEC ahead_car_speed_mph %f \t ref_vel %f\n", ahead_car_speed_mph, ref_vel);
+      }else{
+        ref_vel = ahead_car_speed_mph; 
+      }
+    }
+
+    if(dist_2_ahead_car > 20 && ahead_car_speed_mph > ref_vel && ref_vel < MAX_SPEED_MPH){
+      if((ahead_car_speed_mph - ref_vel) > DESIRE_DELTA_SPEED*.8){
+        ref_vel += DESIRE_DELTA_SPEED*.8;
+        printf("INC ahead_car_speed_mph %f \t ref_vel %f\n", ahead_car_speed_mph, ref_vel);
+      }else{
+        ref_vel = ahead_car_speed_mph; 
+      }
+    }
+
+    if(dist_2_ahead_car > 40 && ref_vel < MAX_SPEED_MPH){
+      ref_vel += DESIRE_DELTA_SPEED;
+    }
+
+  }else if(ref_vel < MAX_SPEED_MPH){
+      ref_vel += DESIRE_DELTA_SPEED;
+  }
+  
+  printf("KL ref_vel %f \t dist_2_ahead_car %f\n", ref_vel, dist_2_ahead_car);
+}
+
+bool possible_to_CL(int cur_lane, int action, double car_s, double future_car_s, double remain_path_size,
+                   const vector<vector<double>> &sensor_fusion, double &ahead_free_s, double &ahead_car_speed_mph){
+  int next_lane = cur_lane + action;
+  if(next_lane < 0 || next_lane > 2)
+    return false;
+  
+  // checking car behind us
+  double target_car_s = 0;
+  double speed_mph = 0;
+  double target_car_future_s = 0;
+  double s_to_target_car = 0;
+  double found = false;
+  found = find_car_behind(car_s, next_lane, sensor_fusion, target_car_s, speed_mph);
+  if(found){
+    target_car_future_s = target_car_s + speed_mph * remain_path_size * SIMULATOR_DT;
+    s_to_target_car = future_car_s - target_car_future_s;
+    printf("try to turn %d, in the future s_to_target_car behind %f \n", action, s_to_target_car);
+    if(s_to_target_car < CL_BEHIND_BUFFER){
+      return false;
+    }
+  }
+  
+  found = false;
+  found = find_car_ahead(car_s, next_lane, sensor_fusion, target_car_s, speed_mph);
+  if(found){
+    target_car_future_s = target_car_s + speed_mph * remain_path_size * SIMULATOR_DT;
+    s_to_target_car = target_car_future_s - future_car_s;
+    printf("try to turn %d, in the future s_to_target_car ahead %f \n", action, s_to_target_car);
+    if(s_to_target_car < CL_AHEAD_BUFFER)
+      return false;
+  }
+
+  if(found){
+    ahead_free_s = s_to_target_car;
+    ahead_car_speed_mph = speed_mph;
+  }else{
+    ahead_free_s = 9999;
+    ahead_car_speed_mph = 9999;
+  }
+
+  return true;
+}
 
 int main() {
   uWS::Hub h;
@@ -97,6 +239,7 @@ int main() {
           auto sensor_fusion = j[1]["sensor_fusion"];
 
           int prev_size = previous_path_x.size(); 
+          double future_car_s = car_s;
 
           json msgJson;
 
@@ -104,43 +247,30 @@ int main() {
           vector<double> next_y_vals;
 
           if(prev_size > 0){
-            car_s = end_path_s; // end_path_s is basically where we will be in the future
+            future_car_s = end_path_s; // end_path_s is basically where we will be in the future
           }
 
-          bool too_close = false;
+          bool CL_req = false;
 
-          //find ref_v to use
-          for(int i=0; i<sensor_fusion.size(); i++){
-            
-            //car in my line 
-            float d = sensor_fusion[i][6];
-            if(d < (2+4*lane+2) && d > (2+4*lane-2)){
-              double vx = sensor_fusion[i][3];
-              double vy = sensor_fusion[i][4];
-              double check_speed = sqrt(vx*vx + vy*vy);
-              double check_car_s = sensor_fusion[i][5];
+          gen_KL_ref_v(car_s, ref_vel, lane, sensor_fusion, CL_req);
 
-              // looking for where is the target car in the future. 
-              check_car_s += ((double)prev_size*.02*check_speed); 
-              // check that if in the future, the target car is in front of us and close to us, within 30 meters
-              if((check_car_s > car_s) && ((check_car_s - car_s)<30)){
-                //ref_vel = 29.5; //mile per hour
-                too_close = true;
-              }
+          if(CL_req){
+            bool good_2_tl = false;
+            double tl_free_s_dist = 0;
+            double tl_ahead_car_speed_mph = 0;
+            good_2_tl = possible_to_CL(lane, TL, car_s, future_car_s, prev_size, sensor_fusion, tl_free_s_dist, tl_ahead_car_speed_mph);
+            if(good_2_tl){
+              lane  = lane + TL;
+              gen_KL_ref_v(car_s, ref_vel, lane, sensor_fusion, CL_req);
+              printf("LC next lane %d \n", lane);
             }
           }
-
-          if(too_close){
-            ref_vel -= .224; // 5 m/s*s, which is small than the 10 m/s*s limits
-          }else if(ref_vel < 49.5){
-            ref_vel += .224;
-          }
-
-
+          
+          printf("left pre size： %d\n", prev_size);
 
           /**
            * Define a path made up of (x,y) points that the car will visit
-           * sequentially every .02 seconds. 
+           * sequentially every .02 seconds. (the simulatore defined so.)
            * The car moves 50 times a second.
            * The map's waypoint are measured from the double yellow line in the middle of the road.
            * Each lane is 4 meters wide, so in the center of the middle lane, the d value will be 1.5 * 4 = 6.
@@ -208,9 +338,9 @@ int main() {
 
           // In Frenet adding evenly 30m spaced points ahead of the starting reference
           // major 'reference points' to generate new path/spline.
-          vector<double> next_wp0 = getXY(car_s+30, 2+lane*4, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-          vector<double> next_wp1 = getXY(car_s+50, 2+lane*4, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-          vector<double> next_wp2 = getXY(car_s+90, 2+lane*4, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          vector<double> next_wp0 = getXY(future_car_s+30, 2+lane*4, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          vector<double> next_wp1 = getXY(future_car_s+50, 2+lane*4, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          vector<double> next_wp2 = getXY(future_car_s+90, 2+lane*4, map_waypoints_s, map_waypoints_x, map_waypoints_y);
 
           ptsx.push_back(next_wp0[0]);
           ptsx.push_back(next_wp1[0]);
@@ -259,7 +389,7 @@ int main() {
 
             // approximately calculate how we should break up the spline/path to maintain the desired reference velocity 
             // the spline maybe a curve, so here it would only be a approximation to split the spline into N segements.
-            double N = (target_dist/(.02*ref_vel/2.24)); // (ref_vel/2.24) convert mile per hour to meter per second
+            double N = (target_dist/(.02*mph2mps(ref_vel)));
             double x_point = x_add_on + (target_x)/N; // find the x value of the start of each path segement.
             double y_point = s(x_point);
 
