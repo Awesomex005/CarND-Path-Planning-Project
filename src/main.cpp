@@ -24,8 +24,8 @@ using std::vector;
 #define DESIRE_DELTA_SPEED mps2mph(DESIRE_ACC*SIMULATOR_DT)
 #define TL -1
 #define TR +1
-#define CL_BEHIND_BUFFER 5 //m
-#define CL_AHEAD_BUFFER 50 //m
+#define CL_BEHIND_BUFFER 10 //m
+#define CL_AHEAD_BUFFER 30 //m
 int lane = 1; // the middle lane
 double ref_vel = 0.0; //mph
 
@@ -88,35 +88,47 @@ void gen_KL_ref_v(double car_s, double &ref_vel, int &cur_lane, const vector<vec
   
   if(car_ahead){
     dist_2_ahead_car = ahead_car_s - car_s;
-    if(dist_2_ahead_car < 30 && ref_vel > ahead_car_speed_mph){
 
-      CL_req = true;
+    // keep distance with ahead car in between 15 to 30 meters
+    if(dist_2_ahead_car < 30 && ref_vel > ahead_car_speed_mph){
       if((ref_vel - ahead_car_speed_mph) > DESIRE_DELTA_SPEED){
         ref_vel -= DESIRE_DELTA_SPEED;
-        printf("DEC ahead_car_speed_mph %f \t ref_vel %f\n", ahead_car_speed_mph, ref_vel);
+        //printf("DEC ahead_car_speed_mph %f \t ref_vel %f\n", ahead_car_speed_mph, ref_vel);
       }else{
         ref_vel = ahead_car_speed_mph; 
       }
     }
 
-    if(dist_2_ahead_car > 20 && ahead_car_speed_mph > ref_vel && ref_vel < MAX_SPEED_MPH){
+    if(dist_2_ahead_car > 15 && ahead_car_speed_mph > ref_vel && ref_vel < MAX_SPEED_MPH){
       if((ahead_car_speed_mph - ref_vel) > DESIRE_DELTA_SPEED*.8){
         ref_vel += DESIRE_DELTA_SPEED*.8;
-        printf("INC ahead_car_speed_mph %f \t ref_vel %f\n", ahead_car_speed_mph, ref_vel);
+        //printf("INC ahead_car_speed_mph %f \t ref_vel %f\n", ahead_car_speed_mph, ref_vel);
       }else{
         ref_vel = ahead_car_speed_mph; 
       }
     }
+
+    // too close
+    if(dist_2_ahead_car < 15 && ref_vel > ahead_car_speed_mph*.8){
+      if((ref_vel - ahead_car_speed_mph*.8) > DESIRE_DELTA_SPEED){
+        ref_vel -= DESIRE_DELTA_SPEED;
+      }else{
+        ref_vel = ahead_car_speed_mph*.8; 
+      }
+    }
+
 
     if(dist_2_ahead_car > 40 && ref_vel < MAX_SPEED_MPH){
       ref_vel += DESIRE_DELTA_SPEED;
     }
 
+    if (dist_2_ahead_car < 40 && ref_vel < MAX_SPEED_MPH){
+      CL_req = true;
+      //printf("KL ref_vel %f \t dist_2_ahead_car %f\n", ref_vel, dist_2_ahead_car);
+    }
   }else if(ref_vel < MAX_SPEED_MPH){
       ref_vel += DESIRE_DELTA_SPEED;
   }
-  
-  printf("KL ref_vel %f \t dist_2_ahead_car %f\n", ref_vel, dist_2_ahead_car);
 }
 
 bool possible_to_CL(int cur_lane, int action, double car_s, double future_car_s, double remain_path_size,
@@ -131,12 +143,14 @@ bool possible_to_CL(int cur_lane, int action, double car_s, double future_car_s,
   double target_car_future_s = 0;
   double s_to_target_car = 0;
   double found = false;
+
   found = find_car_behind(car_s, next_lane, sensor_fusion, target_car_s, speed_mph);
   if(found){
-    target_car_future_s = target_car_s + speed_mph * remain_path_size * SIMULATOR_DT;
-    s_to_target_car = future_car_s - target_car_future_s;
-    printf("try to turn %d, in the future s_to_target_car behind %f \n", action, s_to_target_car);
+    target_car_future_s = target_car_s + mph2mps(speed_mph) * remain_path_size * SIMULATOR_DT;
+    s_to_target_car = future_car_s - target_car_future_s; // when this is negtive it means the target car will drive corss us, not possible to CL. 
+    printf("try to turn %c, in the future s_to_target_car BEHIND %f \n", (action>0?'R':'L'), s_to_target_car);
     if(s_to_target_car < CL_BEHIND_BUFFER){
+      printf("Not meet CL_BEHIND_BUFFER %dm reqierment.\n", CL_BEHIND_BUFFER);
       return false;
     }
   }
@@ -144,11 +158,13 @@ bool possible_to_CL(int cur_lane, int action, double car_s, double future_car_s,
   found = false;
   found = find_car_ahead(car_s, next_lane, sensor_fusion, target_car_s, speed_mph);
   if(found){
-    target_car_future_s = target_car_s + speed_mph * remain_path_size * SIMULATOR_DT;
+    target_car_future_s = target_car_s + mph2mps(speed_mph) * remain_path_size * SIMULATOR_DT;
     s_to_target_car = target_car_future_s - future_car_s;
-    printf("try to turn %d, in the future s_to_target_car ahead %f \n", action, s_to_target_car);
-    if(s_to_target_car < CL_AHEAD_BUFFER)
+    printf("try to turn %c, in the future s_to_target_car AHEAD %f \n", (action>0?'R':'L'), s_to_target_car);
+    if(s_to_target_car < CL_AHEAD_BUFFER){
+      printf("Not meet CL_AHEAD_BUFFER %dm reqierment.\n", CL_AHEAD_BUFFER);
       return false;
+    }
   }
 
   if(found){
@@ -234,8 +250,7 @@ int main() {
           double end_path_s = j[1]["end_path_s"];
           double end_path_d = j[1]["end_path_d"];
 
-          // Sensor Fusion Data, a list of all other cars on the same side 
-          //   of the road.
+          // Sensor Fusion Data, a list of all other cars on the same side of the road.
           auto sensor_fusion = j[1]["sensor_fusion"];
 
           int prev_size = previous_path_x.size(); 
@@ -250,23 +265,53 @@ int main() {
             future_car_s = end_path_s; // end_path_s is basically where we will be in the future
           }
 
+          /*
+           * Stage 1
+           * Determine if we need to change lane (lane), 
+           * and what speed (ref_vel) we need to keep.
+           */
+
           bool CL_req = false;
 
           gen_KL_ref_v(car_s, ref_vel, lane, sensor_fusion, CL_req);
 
           if(CL_req){
             bool good_2_tl = false;
+            bool good_2_tr = false;
             double tl_free_s_dist = 0;
+            double tr_free_s_dist = 0;
             double tl_ahead_car_speed_mph = 0;
+            double tr_ahead_car_speed_mph = 0;
+            int action = 0;
+
             good_2_tl = possible_to_CL(lane, TL, car_s, future_car_s, prev_size, sensor_fusion, tl_free_s_dist, tl_ahead_car_speed_mph);
-            if(good_2_tl){
-              lane  = lane + TL;
+            good_2_tr = possible_to_CL(lane, TR, car_s, future_car_s, prev_size, sensor_fusion, tr_free_s_dist, tr_ahead_car_speed_mph);
+
+            if(good_2_tl || good_2_tr){
+              printf("Good to CL\n");
+              if(good_2_tl && good_2_tr){
+                printf("CL, both line are good to go\n");
+                // compare free s in next 5 sec.
+                if( (tl_free_s_dist+5*mph2mps(tl_ahead_car_speed_mph)) >= 
+                (tr_free_s_dist+5*mph2mps(tr_ahead_car_speed_mph)) ){
+                  good_2_tr = false;
+                }else{
+                  good_2_tl = false;
+                }
+              }
+
+              if(good_2_tl){
+                action = TL;
+              }else{
+                action = TR;
+              }
+              lane  = lane + action;
               gen_KL_ref_v(car_s, ref_vel, lane, sensor_fusion, CL_req);
-              printf("LC next lane %d \n", lane);
+              printf("CL next lane %d \n", lane);
             }
           }
           
-          printf("left pre size： %d\n", prev_size);
+          //printf("left pre size： %d\n", prev_size);
 
           /**
            * Define a path made up of (x,y) points that the car will visit
@@ -296,6 +341,11 @@ int main() {
             next_y_vals.push_back(xy[1]);
           }
 #endif
+          /*
+           * Stage 2
+           * Use spline to generate trajectory according to the (lane) and (ref_vel) we just found.
+           */
+
           // Create a list of widely spaced(x,y) waypoints, evenly spaced at 30m
           // Later we will interoplate these waypoints with a spline and fill it in with more points that contorl the speed.
           vector<double> ptsx;
